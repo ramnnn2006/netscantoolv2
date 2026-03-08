@@ -183,6 +183,7 @@
             animation: fadeInUp 1s ease forwards;
             background: -webkit-linear-gradient(45deg, var(--text), var(--accent));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -950,6 +951,8 @@ function renderDevices(devices) {
             <div class="device-actions">
                 <button class="btn-icon" onclick="event.stopPropagation(); refreshDevice('${d.ip}')" title="Refresh">🔄</button>
                 <button class="btn-icon" onclick="event.stopPropagation(); copyToClipboard('${d.ip}')" title="Copy IP">📋</button>
+                ${d.mac_address ? `<button class="btn-icon" onclick="event.stopPropagation(); wolDevice('${d.ip}', '${d.mac_address}')" title="Wake on LAN">⚡</button>` : ''}
+                ${d.open_ports && (d.open_ports.includes(80) || d.open_ports.includes(443)) ? `<button class="btn-icon" onclick="event.stopPropagation(); window.open('http' + (d.open_ports.includes(443) ? 's' : '') + '://${d.ip}', '_blank')" title="Open Web Interface">🌐</button>` : ''}
             </div>
         </div>`).join('');
 }
@@ -987,6 +990,24 @@ function copyToClipboard(text) {
     navigator.clipboard.writeText(text)
         .then(() => showNotification(`Copied ${text}`, 'success'))
         .catch(() => showNotification('Failed to copy', 'error'));
+}
+
+async function wolDevice(ip, mac) {
+    try {
+        showNotification(`Sending Magic Packet to ${ip}...`, 'info');
+        const res = await fetch(`${API_BASE}/device/${ip}/wol`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ mac: mac })
+        });
+        if (!res.ok) throw new Error('WOL request failed');
+        const data = await res.json();
+        showNotification(data.message || `WOL packet sent to ${ip}`, 'success');
+    } catch (e) {
+        showNotification(`Failed to send WOL to ${ip}`, 'error');
+    }
 }
 
 function exportResults() {

@@ -3,7 +3,7 @@ import re
 import socket
 from functools import lru_cache
 import logging
-
+import platform
 logger = logging.getLogger(__name__)
 LATENCY_RE = re.compile(r"time[=<]([0-9.]+)\s*ms", re.I)
 
@@ -15,7 +15,9 @@ def run_command(cmd, timeout=2):
 
 def ping_once(ip):
     try:
-        proc = run_command(["ping", "-c", "1", "-W", "1", ip])
+        is_win = platform.system().lower() == "windows"
+        cmd = ["ping", "-n", "1", "-w", "1000", ip] if is_win else ["ping", "-c", "1", "-W", "1", ip]
+        proc = run_command(cmd)
         if proc.returncode == 0:
             m = LATENCY_RE.search(proc.stdout) or LATENCY_RE.search(proc.stderr)
             latency = float(m.group(1)) if m else None
@@ -38,17 +40,25 @@ def reverse_dns(ip, timeout=0.5):
         socket.setdefaulttimeout(sock_to)
 
 def get_mac_address(ip):
+    is_win = platform.system().lower() == "windows"
     try:
-        result = run_command(["ip", "neigh", "show", ip], timeout=1)
-        if result.returncode == 0:
-            match = re.search(r"([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})", result.stdout)
-            if match:
-                return match.group(1).upper()
-        result = run_command(["arp", "-n", ip], timeout=1)
-        if result.returncode == 0:
-            match = re.search(r"([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})", result.stdout)
-            if match:
-                return match.group(1).upper()
+        if is_win:
+            result = run_command(["arp", "-a", ip], timeout=1)
+            if result.returncode == 0:
+                match = re.search(r"([0-9a-fA-F]{2}-[0-9a-fA-F]{2}-[0-9a-fA-F]{2}-[0-9a-fA-F]{2}-[0-9a-fA-F]{2}-[0-9a-fA-F]{2})", result.stdout)
+                if match:
+                    return match.group(1).replace("-", ":").upper()
+        else:
+            result = run_command(["ip", "neigh", "show", ip], timeout=1)
+            if result.returncode == 0:
+                match = re.search(r"([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})", result.stdout)
+                if match:
+                    return match.group(1).upper()
+            result = run_command(["arp", "-n", ip], timeout=1)
+            if result.returncode == 0:
+                match = re.search(r"([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2})", result.stdout)
+                if match:
+                    return match.group(1).upper()
     except Exception as e:
         logger.debug(f"Failed to get MAC for {ip}: {e}")
     return None

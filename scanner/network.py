@@ -14,26 +14,24 @@ class NetworkScanner:
         self.config = Config()
 
     def list_local_ipv4s(self):
+        import psutil
+        rows = []
         try:
-            out = run_command(["ip", "-o", "-4", "addr", "show"]).stdout.strip().splitlines()
+            for iface, addrs in psutil.net_if_addrs().items():
+                if any(iface.startswith(p) for p in self.config.EXCLUDE_INTERFACES):
+                    continue
+                for addr in addrs:
+                    if addr.family == socket.AF_INET and addr.address != "127.0.0.1":
+                        ip_str = addr.address
+                        netmask = addr.netmask
+                        if netmask:
+                            # Calculate CIDR prefix from netmask
+                            cidr = sum(bin(int(x)).count('1') for x in netmask.split('.'))
+                        else:
+                            cidr = 24
+                        rows.append((iface, ip_str, cidr))
         except Exception as e:
             logger.error(f"Failed to list local IPs: {e}")
-            return []
-        rows = []
-        for line in out:
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            iface = parts[1]
-            if any(iface.startswith(p) for p in self.config.EXCLUDE_INTERFACES):
-                continue
-            if parts[2] != "inet":
-                continue
-            try:
-                ip_str, cidrlen = parts[3].split("/")
-                rows.append((iface, ip_str, int(cidrlen)))
-            except Exception:
-                continue
         return rows
 
     def candidate_subnets(self):
