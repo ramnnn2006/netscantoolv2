@@ -76,12 +76,13 @@ waitress-serve --host=0.0.0.0 --port=5000 app:app
 
 ## 🛠️ Project Structure
 
+```text
 .
 ├── api/
-│ ├── **init**.py
+│ ├── __init__.py
 │ └── routes.py # Flask API routes
 ├── scanner/
-│ ├── **init**.py
+│ ├── __init__.py
 │ ├── device.py # DeviceInfo data class
 │ ├── network.py # Core network scanning logic
 │ └── utils.py # Helper functions (ping, DNS, etc.)
@@ -92,16 +93,13 @@ waitress-serve --host=0.0.0.0 --port=5000 app:app
 ├── config.py # Application configuration
 ├── requirements.txt # Python dependencies
 └── setup.sh # Automatic project setup script
-
 ```
 
 ### 💻 Technologies Used
 
     Backend: Flask, Python
-
     Frontend: HTML5, CSS3, JavaScript (Vanilla)
 
 ### 📜 License
 
 This project is licensed under the MIT License - see the LICENSE.md file for details.
-```
