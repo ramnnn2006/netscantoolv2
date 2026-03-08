@@ -65,6 +65,34 @@ def get_device_detail(ip):
         logger.error(f"Error getting device details: {e}")
         return jsonify({"error": str(e)}), 500
 
+@api_bp.route('/device/<ip>/wol', methods=['POST'])
+def wol_device(ip):
+    try:
+        data = request.json
+        mac = data.get('mac') if data else None
+        if not mac:
+            mac = get_mac_address(ip)
+        if not mac:
+            return jsonify({"error": "No MAC address available for Wake on LAN"}), 404
+            
+        import socket, struct
+        # Parse MAC
+        mac_clean = mac.replace(':', '').replace('-', '')
+        if len(mac_clean) != 12:
+            return jsonify({"error": "Invalid MAC address format"}), 400
+            
+        mac_bytes = bytes.fromhex(mac_clean)
+        magic_packet = b'\xff' * 6 + mac_bytes * 16
+        
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.sendto(magic_packet, ('255.255.255.255', 9))
+        
+        return jsonify({"message": f"WOL packet sent to {mac}"})
+    except Exception as e:
+        logger.error(f"Error sending WOL to {ip}: {e}")
+        return jsonify({"error": str(e)}), 500
+
 @api_bp.route('/health', methods=['GET'])
 def health_check():
     return jsonify({"status": "healthy", "timestamp": time.time(), "version": "2.0"})
