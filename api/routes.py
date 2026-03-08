@@ -158,4 +158,36 @@ def wol_device(ip):
 
 @api_bp.route('/health', methods=['GET'])
 def health_check():
-    return jsonify({"status": "healthy", "timestamp": time.time(), "version": "2.0"})
+    return jsonify({"status": "healthy", "timestamp": time.time(), "version": "2.1"})
+
+@api_bp.route('/speedtest', methods=['GET'])
+def run_speedtest():
+    try:
+        # Simple simulated speedtest or basic latency check
+        # For a real speedtest, you'd need the 'speedtest-cli' library
+        import socket
+        start = time.time()
+        socket.gethostbyname('google.com')
+        latency = round((time.time() - start) * 1000, 2)
+        return jsonify({
+            "latency": latency,
+            "server": "Google DNS",
+            "status": "online"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@api_bp.route('/lookup/<mac>', methods=['GET'])
+def lookup_mac(mac):
+    # Public API wrapper for OUI lookup
+    try:
+        import requests
+        res = requests.get(f"https://api.macvendors.com/{mac}", timeout=2)
+        if res.status_code == 200:
+            return jsonify({"mac": mac, "vendor": res.text})
+        return jsonify({"error": "Not found"}), 404
+    except:
+        # Fallback to internal
+        from scanner.utils import get_vendor
+        v = get_vendor(mac)
+        return jsonify({"mac": mac, "vendor": v or "Unknown"})
