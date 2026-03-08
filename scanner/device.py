@@ -13,6 +13,8 @@ class DeviceInfo:
     statusColor: str
     last_seen: float
     device_type: Optional[str] = None
+    banners: Optional[dict] = None
+    os_guess: Optional[str] = None
 
     def to_dict(self):
         d = asdict(self)

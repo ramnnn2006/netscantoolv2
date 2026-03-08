@@ -6,6 +6,7 @@ import logging
 import platform
 logger = logging.getLogger(__name__)
 LATENCY_RE = re.compile(r"time[=<]([0-9.]+)\s*ms", re.I)
+TTL_RE = re.compile(r"TTL=([0-9]+)", re.I)
 
 def run_command(cmd, timeout=2):
     try:
@@ -19,13 +20,29 @@ def ping_once(ip):
         cmd = ["ping", "-n", "1", "-w", "1000", ip] if is_win else ["ping", "-c", "1", "-W", "1", ip]
         proc = run_command(cmd)
         if proc.returncode == 0:
-            m = LATENCY_RE.search(proc.stdout) or LATENCY_RE.search(proc.stderr)
-            latency = float(m.group(1)) if m else None
-            return "up", latency
-        return "down", None
+            out = proc.stdout + proc.stderr
+            m_lat = LATENCY_RE.search(out)
+            m_ttl = TTL_RE.search(out)
+            latency = float(m_lat.group(1)) if m_lat else None
+            ttl = int(m_ttl.group(1)) if m_ttl else None
+            return "up", latency, ttl
+        return "down", None, None
     except Exception as e:
         logger.debug(f"Ping failed for {ip}: {e}")
-        return "down", None
+        return "down", None, None
+
+def get_banner(ip, port, timeout=1.0):
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        sock.connect((ip, port))
+        if port == 80:
+            sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+        banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()
+        sock.close()
+        return banner[:100] if banner else None
+    except Exception:
+        return None
 
 @lru_cache(maxsize=256)
 def reverse_dns(ip, timeout=0.5):
@@ -88,20 +105,24 @@ def classify_status(lat_ms):
         return {"label": "Poor", "color": "orange"}
     return {"label": "Critical", "color": "red"}
 
-def guess_device_type(hostname, mac, open_ports):
-    if not hostname and not mac and not open_ports:
-        return None
+def guess_os(ttl):
+    if not ttl: return "Unknown"
+    if ttl <= 64: return "Linux/Unix"
+    if ttl <= 128: return "Windows"
+    if ttl <= 255: return "Cisco/Network Device"
+    return "Unknown"
+
+def guess_device_type(hostname, mac, open_ports, ttl):
     hostname_lower = (hostname or '').lower()
-    if any(x in hostname_lower for x in ['router', 'gateway']):
+    if any(x in hostname_lower for x in ['router', 'gateway']) or ttl == 255:
         return 'Router'
-    if any(x in hostname_lower for x in ['printer', 'print']):
+    if any(x in hostname_lower for x in ['printer', 'print']) or 9100 in open_ports:
         return 'Printer'
-    if any(x in hostname_lower for x in ['camera', 'cam']):
+    if any(x in hostname_lower for x in ['camera', 'cam']) or 554 in open_ports:
         return 'Camera'
-    if 3389 in open_ports:
-        return 'Windows'
-    if 22 in open_ports and 80 not in open_ports:
-        return 'Linux/Unix'
-    if set([80, 443]).issubset(open_ports):
+    if 80 in open_ports or 443 in open_ports:
+        if 'linux' in hostname_lower: return 'Linux Server'
         return 'Web Server'
-    return 'Unknown'
+    if 445 in open_ports or 3389 in open_ports: return 'Windows Station'
+    if 22 in open_ports: return 'Linux/SSH Device'
+    return 'Generic Device'

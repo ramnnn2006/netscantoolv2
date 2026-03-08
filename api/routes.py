@@ -21,20 +21,80 @@ def get_subnets():
         return jsonify({"error": str(e)}), 500
 
 @api_bp.route('/scan', methods=['GET'])
-def scan_network():
+def start_scan():
+    cidr = request.args.get('cidr')
+    mode = request.args.get('deep', 'false').lower()
+    limit = int(request.args.get('limit', 254))
+    
+    if not cidr:
+        return jsonify({"error": "CIDR parameter is required"}), 400
+    
     try:
-        cidr = request.args.get("cidr")
-        deep_scan = request.args.get("deep", "false").lower() == "true"
-        limit = int(request.args.get("limit", 254))
-        if not cidr:
-            subs = scanner.candidate_subnets()
-            cidr = subs[0]["cidr"] if subs else "192.168.1.0/24"
-        logger.info(f"Scanning {cidr} (deep={deep_scan}, limit={limit})")
         start_time = time.time()
-        data = scanner.scan_cidr(cidr, limit_hosts=limit, deep_scan=deep_scan)
-        scan_time = time.time() - start_time
-        logger.info(f"Scan completed in {scan_time:.2f}s, found {len(data)} devices")
-        return jsonify({"cidr": cidr, "count": len(data), "scan_time": round(scan_time, 2), "devices": data})
+        
+        # Define scan parameters based on mode
+        ports = None
+        grab_banners = False
+        deep_scan_bool = False
+        
+        if mode == 'true' or mode == 'standard':
+            ports = scanner.config.COMMON_PORTS
+            deep_scan_bool = True
+        elif mode == 'advanced':
+            ports = sorted(list(set(scanner.config.COMMON_PORTS + scanner.config.WEB_PORTS + scanner.config.IOT_PORTS)))
+            grab_banners = True
+            deep_scan_bool = True
+        elif mode == 'iot':
+            ports = scanner.config.IOT_PORTS
+            grab_banners = True
+            deep_scan_bool = True
+        elif mode == 'quick':
+            deep_scan_bool = False
+            
+        def scan_work():
+            # We bypass the default scan_cidr to inject our custom ports/banners
+            from scanner.utils import guess_os # Changed from .utils to scanner.utils
+            try:
+                net = ipaddr.ip_network(cidr, strict=False)
+            except Exception: return []
+            targets = [str(ip) for i, ip in enumerate(net.hosts()) if i < limit]
+            results = []
+            
+            def single_work(ip):
+                st, lat, ttl = ping_once(ip)
+                if st == "down": return None
+                host = reverse_dns(ip)
+                mac = get_mac_address(ip)
+                vendor = get_vendor(mac)
+                
+                open_ports, banners = ([], {})
+                if deep_scan_bool:
+                    open_ports, banners = scanner.scan_ports(ip, ports=ports, grab_banners=grab_banners)
+                
+                status_meta = classify_status(lat)
+                device_type = guess_device_type(host, mac, open_ports, ttl)
+                os_guess = guess_os(ttl)
+                return DeviceInfo(
+                    ip=ip, hostname=host, latency=lat, mac_address=mac, vendor=vendor,
+                    open_ports=open_ports, status=status_meta["label"],
+                    statusColor=status_meta["color"], last_seen=time.time(),
+                    device_type=device_type, banners=banners, os_guess=os_guess
+                ).to_dict()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=scanner.config.MAX_WORKERS) as ex:
+                for item in ex.map(single_work, targets):
+                    if item: results.append(item)
+            return sorted(results, key=lambda x: ipaddr.ip_address(x['ip']))
+
+        devices = scan_work()
+        scan_time = round(time.time() - start_time, 2)
+        
+        return jsonify({
+            "devices": devices,
+            "count": len(devices),
+            "scan_time": scan_time,
+            "cidr": cidr
+        })
     except Exception as e:
         logger.error(f"Scan error: {e}")
         return jsonify({"error": str(e)}), 500
@@ -46,19 +106,22 @@ def get_device_detail(ip):
     except ValueError:
         return jsonify({"error": "Invalid IP address"}), 400
     try:
-        st, lat = ping_once(ip)
+        from scanner.utils import guess_os
+        st, lat, ttl = ping_once(ip)
         if st == "down":
             return jsonify({"error": "Device unreachable"}), 404
         host = reverse_dns(ip)
         mac = get_mac_address(ip)
         vendor = get_vendor(mac) if mac else None
-        open_ports = scanner.scan_ports(ip)
+        open_ports, banners = scanner.scan_ports(ip, grab_banners=True)
         status_meta = classify_status(lat)
-        device_type = guess_device_type(host, mac, open_ports)
+        device_type = guess_device_type(host, mac, open_ports, ttl)
+        os_guess = guess_os(ttl)
         device = DeviceInfo(
             ip=ip, hostname=host, latency=lat, mac_address=mac, vendor=vendor,
             open_ports=open_ports, status=status_meta["label"],
-            statusColor=status_meta["color"], last_seen=time.time(), device_type=device_type
+            statusColor=status_meta["color"], last_seen=time.time(), 
+            device_type=device_type, banners=banners, os_guess=os_guess
         )
         return jsonify(device.to_dict())
     except Exception as e:

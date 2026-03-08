@@ -703,10 +703,12 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Scan Depth</label>
+                    <label>Scan Mode</label>
                     <select id="deepScan">
-                        <option value="false">Quick Scan (Fast)</option>
-                        <option value="true">Deep Scan (Ports)</option>
+                        <option value="quick">Discovery (IP/Mac Only)</option>
+                        <option value="standard">Standard (Common Ports)</option>
+                        <option value="advanced">Advanced (All + Banners)</option>
+                        <option value="iot">IoT / Camera Focus</option>
                     </select>
                 </div>
                 <div class="form-group">
@@ -928,25 +930,35 @@ function displayResults(data) {
 }
 
 function renderDevices(devices) {
-    return devices.map(d => `
+    updateNetworkStats(devices);
+    return devices.map(d => {
+        const osIcon = d.os_guess === 'Windows' ? '🪟' : (d.os_guess === 'Linux/Unix' ? '🐧' : (d.os_guess?.includes('Network') ? '🌐' : '❓'));
+        return `
         <div class="device-item" data-ip="${d.ip}" data-hostname="${d.hostname || ''}" data-mac="${d.mac_address || ''}" data-status="${d.status.toLowerCase()}">
             <div class="device-header">
                 <div>
                     <div class="device-ip">${d.ip}</div>
                     ${d.device_type ? `<div class="device-type">${d.device_type}</div>` : ''}
                 </div>
-                <div class="status-pill status-${d.status.toLowerCase()}">${d.status}</div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <span title="OS Guess: ${d.os_guess || 'Unknown'}">${osIcon}</span>
+                    <div class="status-pill status-${d.status.toLowerCase()}">${d.status}</div>
+                </div>
             </div>
             <div class="device-details">
                 <div class="detail-item"><div class="detail-label">Hostname</div><div class="detail-value">${d.hostname || 'N/A'}</div></div>
                 <div class="detail-item"><div class="detail-label">Latency</div><div class="detail-value">${d.latency ? d.latency + 'ms' : '—'}</div></div>
+                ${d.os_guess ? `<div class="detail-item"><div class="detail-label">OS Guess</div><div class="detail-value">${d.os_guess}</div></div>` : ''}
                 ${d.mac_address ? `<div class="detail-item"><div class="detail-label">MAC Address</div><div class="detail-value">${d.mac_address}</div></div>` : ''}
                 ${d.vendor ? `<div class="detail-item"><div class="detail-label">Vendor</div><div class="detail-value">${d.vendor}</div></div>` : ''}
             </div>
             ${d.open_ports && d.open_ports.length > 0 ? `
                 <div class="ports-list">
                     <span class="ports-label">Open Ports:</span>
-                    ${d.open_ports.map(p => `<span class="port-badge" title="${getPortService(p)}">:${p}</span>`).join('')}
+                    ${d.open_ports.map(p => {
+                        const banner = d.banners && d.banners[p] ? ` - ${d.banners[p]}` : '';
+                        return `<span class="port-badge" title="${getPortService(p)}${banner}">:${p}</span>`;
+                    }).join('')}
                 </div>` : ''}
             <div class="device-actions">
                 <button class="btn-icon" onclick="event.stopPropagation(); refreshDevice('${d.ip}')" title="Refresh">🔄</button>
@@ -954,7 +966,17 @@ function renderDevices(devices) {
                 ${d.mac_address ? `<button class="btn-icon" onclick="event.stopPropagation(); wolDevice('${d.ip}', '${d.mac_address}')" title="Wake on LAN">⚡</button>` : ''}
                 ${d.open_ports && (d.open_ports.includes(80) || d.open_ports.includes(443)) ? `<button class="btn-icon" onclick="event.stopPropagation(); window.open('http' + (d.open_ports.includes(443) ? 's' : '') + '://${d.ip}', '_blank')" title="Open Web Interface">🌐</button>` : ''}
             </div>
-        </div>`).join('');
+        </div>`}).join('');
+}
+
+function updateNetworkStats(devices) {
+    const vendors = {};
+    const types = {};
+    devices.forEach(d => {
+        if (d.vendor) vendors[d.vendor] = (vendors[d.vendor] || 0) + 1;
+        if (d.device_type) types[d.device_type] = (types[d.device_type] || 0) + 1;
+    });
+    // For now we just log them, or you could render a small summary in the UI
 }
 
 function filterDevices() {
@@ -1030,8 +1052,13 @@ function exportResults() {
 }
 
 function getPortService(port) {
-    const services = { 21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 443: 'HTTPS', 445: 'SMB', 3306: 'MySQL', 3389: 'RDP', 5432: 'PostgreSQL', 5900: 'VNC', 8080: 'HTTP Alt', 8443: 'HTTPS Alt' };
-    return services[port] || 'Unknown';
+    const services = { 
+        21: 'FTP', 22: 'SSH', 23: 'Telnet', 25: 'SMTP', 53: 'DNS', 80: 'HTTP', 135: 'RPC', 139: 'NetBIOS',
+        443: 'HTTPS', 445: 'SMB', 554: 'RTSP (Camera)', 1900: 'SSDP (UPnP)', 3000: 'Dev App', 3306: 'MySQL', 
+        3389: 'RDP', 5000: 'Scanner/API', 5353: 'mDNS (Bonjour)', 5432: 'PostgreSQL', 5900: 'VNC', 
+        8080: 'HTTP Alt', 8443: 'HTTPS Alt', 8888: 'Smart Device', 9000: 'Portainer/Admin', 9100: 'JetDirect (Printer)' 
+    };
+    return services[port] || 'Generic TCP';
 }
 
 function showNotification(message, type = 'info') {

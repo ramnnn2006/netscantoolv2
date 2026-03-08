@@ -51,25 +51,36 @@ class NetworkScanner:
                     })
         return subs
 
-    def scan_ports(self, ip, ports=None, timeout=0.3):
+    def scan_ports(self, ip, ports=None, timeout=0.3, grab_banners=False):
         if ports is None:
             ports = self.config.COMMON_PORTS
         open_ports = []
+        banners = {}
         def check_port(port):
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 sock.settimeout(timeout)
                 result = sock.connect_ex((ip, port))
+                banner = None
+                if result == 0 and grab_banners:
+                    try:
+                        if port == 80: sock.send(b"HEAD / HTTP/1.0\r\n\r\n")
+                        banner = sock.recv(1024).decode('utf-8', errors='ignore').strip()[:100]
+                    except: pass
                 sock.close()
-                return port if result == 0 else None
+                return (port, banner) if result == 0 else (None, None)
             except Exception:
-                return None
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            results = executor.map(check_port, ports)
-            open_ports = [p for p in results if p is not None]
-        return sorted(open_ports)
+                return (None, None)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
+            results = list(executor.map(check_port, ports))
+            for p, b in results:
+                if p is not None:
+                    open_ports.append(p)
+                    if b: banners[str(p)] = b
+        return sorted(open_ports), banners
 
     def scan_cidr(self, cidr, limit_hosts=254, max_workers=100, deep_scan=False):
+        from .utils import guess_os
         try:
             net = ipaddress.ip_network(cidr, strict=False)
         except Exception as e:
@@ -78,19 +89,21 @@ class NetworkScanner:
         targets = [str(ip) for i, ip in enumerate(net.hosts()) if i < limit_hosts]
         rows = []
         def work(ip):
-            st, lat = ping_once(ip)
+            st, lat, ttl = ping_once(ip)
             if st == "down":
                 return None
             host = reverse_dns(ip)
             mac = get_mac_address(ip)
             vendor = get_vendor(mac)
-            open_ports = self.scan_ports(ip) if deep_scan else []
+            open_ports, banners = self.scan_ports(ip, grab_banners=deep_scan) if deep_scan else ([], {})
             status_meta = classify_status(lat)
-            device_type = guess_device_type(host, mac, open_ports)
+            device_type = guess_device_type(host, mac, open_ports, ttl)
+            os_guess = guess_os(ttl)
             return DeviceInfo(
                 ip=ip, hostname=host, latency=lat, mac_address=mac, vendor=vendor,
                 open_ports=open_ports, status=status_meta["label"],
-                statusColor=status_meta["color"], last_seen=time.time(), device_type=device_type
+                statusColor=status_meta["color"], last_seen=time.time(), 
+                device_type=device_type, banners=banners, os_guess=os_guess
             )
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             for item in ex.map(work, targets):
